@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>电压比较器实验台</title>
+<style>
+:root{color-scheme:light;--ink:#182d29;--muted:#4c635d;--green:#16614d;--line:#d4dfd9;--paper:#f3f5ed;--white:#fffef9;--orange:#ad532e}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:clamp(18px,5vw,60px)}header{margin-bottom:28px}h1,h2,h3,p{margin:0}h1{font-size:clamp(36px,7vw,66px);letter-spacing:-.065em;line-height:1.15;margin-bottom:12px}h2{font-size:23px}p{margin-top:8px}.intro,.note{color:var(--muted)}nav,.actions{display:flex;gap:8px;flex-wrap:wrap}button{font:inherit;font-weight:650;cursor:pointer;padding:8px 13px;border:1px solid var(--line);border-radius:8px;background:var(--white);color:var(--ink)}button[aria-pressed=true],#sweep{background:var(--green);color:white;border-color:var(--green)}button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--orange);outline-offset:3px}.panel{margin-top:12px;background:var(--white);border:1px solid var(--line);border-radius:16px;padding:clamp(14px,3vw,28px)}.grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:24px;align-items:start}.readings{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:16px 0}.reading{background:#edf3ed;border-radius:10px;padding:8px 12px}.reading small{display:block;color:var(--muted)}output,.value{font-variant-numeric:tabular-nums;font-weight:750;font-size:21px}.value.low{color:var(--orange)}.value.high{color:var(--green)}input[type=range]{display:block;width:100%;accent-color:var(--green);margin:8px 0 15px}.status{min-height:3.3em}.scope{background:#f4f7f2;border-radius:12px;padding:12px}canvas{display:block;width:100%;height:230px}.legend{font-size:13px;color:var(--muted)}.wire{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.wire>div{border-left:3px solid var(--green);background:#edf3ed;padding:8px 12px}.formula{font-family:ui-monospace,monospace;overflow-wrap:anywhere}summary{cursor:pointer;font-weight:700}.section{margin-top:18px}.compare{display:grid;gap:12px;grid-template-columns:repeat(3,1fr)}.compare section{border-top:1px solid var(--line);padding-top:10px}.compare h3{font-size:16px}@media(max-width:720px){.grid,.compare{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>电压比较器实验台</h1>
+<p class="intro">比较器比较两个输入端的电压。<strong>＋端更高，输出高电平。－端更高，输出低电平。</strong> 本页用 5 V 和 0 V 表示两种输出。</p>
+</header>
+<nav aria-label="选择比较器">
+<button type="button" data-mode="single" aria-pressed="true">单限比较器</button>
+<button type="button" data-mode="positive" aria-pressed="false">同相滞回</button>
+<button type="button" data-mode="negative" aria-pressed="false">反相滞回</button>
+</nav>
+<section class="panel" aria-labelledby="title">
+<div class="grid">
+<div>
+<h2 id="title"></h2>
+<p id="description"></p>
+<div class="readings">
+<div class="reading"><small>输入 Vᵢ</small><output id="input-value" for="voltage"></output></div>
+<div class="reading"><small>输出 Vₒ</small><span id="output-value" class="value"></span></div>
+</div>
+<label for="voltage">拖动滑块改变输入电压</label>
+<input type="range" id="voltage" min="1" max="3" step="0.01" value="1">
+<div class="actions">
+<button id="from-low" type="button">从 1 V 升到 2 V</button>
+<button id="from-high" type="button">从 3 V 降到 2 V</button>
+<button id="sweep" type="button">播放升降</button>
+</div>
+<p class="status" id="status"></p>
+</div>
+<div class="scope">
+<h3>输入–输出特性</h3>
+<canvas id="plot" role="img" aria-label="输入电压与输出电平的关系图"></canvas>
+<p class="legend">箭头表示输入变化方向，圆点表示当前状态。</p>
+</div>
+</div>
+<div class="section">
+<h3>两个输入端怎么接？</h3>
+<div class="wire"><div id="plus"></div><div id="minus"></div></div>
+<p id="feedback"></p>
+<details class="section"><summary>展开门限计算</summary><p class="formula" id="formula"></p><p id="derive"></p></details>
+</div>
+</section>
+<section class="panel compare" aria-label="三种比较器的区别">
+<section><h3>单限比较器</h3><p>本例门限是 2 V。输入上升和下降都在同一位置翻转。</p></section>
+<section><h3>同相滞回</h3><p>升过 2.2 V 时输出变高。降过 1.8 V 时输出变低。</p></section>
+<section><h3>反相滞回</h3><p>升过 2.2 V 时输出变低。降过 1.8 V 时输出变高。</p></section>
+</section>
+<p class="note">试试在滞回模式下分别点击两个「到 2 V」按钮。同一输入会得到两个不同的输出。输入恰好等于门限时，本演示保持原状态。</p>
+</main>
+<script>
+"use strict";
+const byId = id => document.getElementById(id);
+const slider = byId("voltage");
+const canvas = byId("plot");
+const ctx = canvas.getContext("2d");
+const modes = {
+  single: {
+    title: "单限比较器", description: "输入超过 2 V 时输出高，低于 2 V 时输出低。",
+    plus: "＋端接输入 Vᵢ", minus: "－端接 2 V 参考电压",
+    feedback: "参考电压固定，翻转门限始终是 2 V。把输入与参考电压对调，输出方向就会反过来。",
+    formula: "V₊ = Vᵢ，V₋ = 2 V",
+    derive: "翻转条件 V₊ = V₋，直接得到 Vᵢ = 2 V。"
+  },
+  positive: {
+    title: "同相滞回比较器", description: "输入升过 2.2 V 才变高，降过 1.8 V 才变低。",
+    plus: "＋端通过 8 kΩ 接 Vᵢ，通过 100 kΩ 接 Vₒ", minus: "－端接 55/27 V 参考电压（约 2.037 V）",
+    feedback: "输出跳高后，反馈会抬高 ＋ 端电压。输入必须降得更低，才能让 ＋ 端跌到 － 端以下。",
+    formula: "V₊ = (25Vᵢ + 2Vₒ)/27",
+    derive: "令 V₊ = V₋，得到 Vᵢ = 2.2 V − 0.08Vₒ。翻转前若输出为 0 V，上升门限是 2.2 V。若输出为 5 V，下降门限是 1.8 V。"
+  },
+  negative: {
+    title: "反相滞回比较器", description: "输入升过 2.2 V 才变低，降过 1.8 V 才变高。",
+    plus: "＋端通过 8 kΩ 接参考电压，通过 92 kΩ 接 Vₒ", minus: "－端直接接输入 Vᵢ",
+    feedback: "参考电压取 45/23 V（约 1.957 V）。输出跳低后，反馈会拉低 ＋ 端电压。输入必须进一步下降，才能让 － 端低于 ＋ 端。",
+    formula: "V₊ = 0.92Vref + 0.08Vₒ = 1.8 V + 0.08Vₒ",
+    derive: "此时 V₋ 就是输入 Vᵢ。令 V₋ = V₊，翻转前若输出为 5 V，上升门限是 2.2 V。若输出为 0 V，下降门限是 1.8 V。"
+  }
+};
+let mode = "single";
+let voltage = 1;
+let high = false;
+let timer;
+function nextOutput(kind, input, previous) {
+  if (kind === "single") {
+    if (input === 2) return previous;
+    return input > 2;
+  }
+  if (input > 2.2) return kind === "positive";
+  if (input < 1.8) return kind === "negative";
+  return previous;
+}
+function setVoltage(value, message = "") {
+  const previous = high;
+  high = nextOutput(mode, value, previous);
+  voltage = value;
+  slider.value = value;
+  byId("input-value").textContent = value.toFixed(2) + " V";
+  const output = byId("output-value");
+  output.textContent = high ? "5 V · 高" : "0 V · 低";
+  output.className = high ? "value high" : "value low";
+  const held = mode !== "single" && value >= 1.8 && value <= 2.2;
+  let status = high ? "当前输出为高电平。" : "当前输出为低电平。";
+  if (held) status = "输入在两个门限之间或恰好等于门限，输出保持原状态。";
+  if (mode === "single" && value === 2) status = "输入恰好等于门限，本演示保持原状态。";
+  if (high !== previous) status = high ? "输出翻转为高电平。" : "输出翻转为低电平。";
+  byId("status").textContent = message ? message + " " + status : status;
+  draw();
+}
+function draw() {
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (!width || !height) return;
+  const scale = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  const x = value => 40 + (value - 1) * (width - 57) / 2;
+  const y = state => state ? 62 : 161;
+  const upper = mode === "single" ? 2 : 2.2;
+  const lower = mode === "single" ? 2 : 1.8;
+  function line(points, color, thickness = 1) {
+    ctx.beginPath();
+    points.forEach(([px, py], index) => index ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = thickness;
+    ctx.stroke();
+  }
+  function label(value, px, py, align = "center") {
+    ctx.font = "12px system-ui";
+    ctx.fillStyle = "#4c635d";
+    ctx.textAlign = align;
+    ctx.fillText(value, px, py);
+  }
+  function arrow(px, py, dx, dy, color) {
+    line([[px-8*dx+4*dy,py-8*dy-4*dx],[px,py],[px-8*dx-4*dy,py-8*dy+4*dx]],color,2);
+  }
+  if (mode !== "single") {
+    ctx.fillStyle = "#e4eee6";
+    ctx.fillRect(x(lower), 38, x(upper)-x(lower), 145);
+  }
+  for (const state of [true, false]) {
+    line([[x(1), y(state)], [x(3), y(state)]], "#d4dfd9");
+    label(state ? "5 V" : "0 V", 30, y(state)+4, "right");
+  }
+  for (const tick of new Set([1, lower, upper, 3])) {
+    line([[x(tick), 38], [x(tick), 183]], "#d4dfd9");
+    label(tick.toFixed(1), x(tick), 203);
+  }
+  label("输出 Vₒ", 9, 22, "left");
+  label("输入 Vᵢ（V）", width/2, 225);
+  const startsHigh = mode === "negative";
+  const left = y(startsHigh);
+  const right = y(!startsHigh);
+  line([[x(1),left],[x(upper),left],[x(upper),right],[x(3),right]],"#16614d",2.5);
+  if (mode !== "single") {
+    line([[x(lower),left],[x(lower),right],[x(upper),right]],"#ad532e",2.5);
+    arrow(x(upper),(left+right)/2,0,Math.sign(right-left),"#16614d");
+    arrow(x(lower),(left+right)/2,0,Math.sign(left-right),"#ad532e");
+  } else {
+    arrow(x(1.55),left,1,0,"#16614d");
+    arrow(x(2.55),right,-1,0,"#16614d");
+  }
+  ctx.beginPath();
+  ctx.arc(x(voltage), y(high), 6, 0, 2*Math.PI);
+  ctx.fillStyle = "#182d29";
+  ctx.fill();
+  ctx.strokeStyle = "#fffef9";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  canvas.setAttribute("aria-label", modes[mode].title + "特性图。输入 " + voltage.toFixed(2) + " V，输出 " + (high ? "5 V" : "0 V"));
+}
+function stopSweep() {
+  clearInterval(timer);
+  timer = undefined;
+  byId("sweep").textContent = "播放升降";
+}
+function selectMode(kind) {
+  stopSweep();
+  mode = kind;
+  const content = modes[kind];
+  for (const key of ["title","description","plus","minus","feedback","formula","derive"]) {
+    byId(key).textContent = content[key];
+  }
+  document.querySelectorAll("[data-mode]").forEach(button => {
+    button.setAttribute("aria-pressed", button.dataset.mode === kind);
+  });
+  setVoltage(1);
+}
+slider.addEventListener("input", () => {
+  stopSweep();
+  setVoltage(Number(slider.value));
+});
+document.querySelectorAll("[data-mode]").forEach(button => {
+  button.addEventListener("click", () => selectMode(button.dataset.mode));
+});
+function approach(start) {
+  stopSweep();
+  setVoltage(start);
+  setVoltage(2, start === 1 ? "从低电压上升到 2 V。" : "从高电压下降到 2 V。");
+}
+byId("from-low").addEventListener("click", () => approach(1));
+byId("from-high").addEventListener("click", () => approach(3));
+byId("sweep").addEventListener("click", () => {
+  if (timer !== undefined) {
+    stopSweep();
+    return;
+  }
+  let step = 0;
+  setVoltage(1);
+  byId("sweep").textContent = "停止播放";
+  timer = setInterval(() => {
+    step += 2;
+    const value = 100 + Math.min(step, 400-step);
+    setVoltage(value/100);
+    if (step === 400) stopSweep();
+  }, 30);
+});
+selectMode("single");
+new ResizeObserver(draw).observe(canvas);
+</script>
+</body>
+</html>
